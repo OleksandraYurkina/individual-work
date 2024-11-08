@@ -11,27 +11,6 @@ class RouteDisplay(ABC):
     def display_route(self, route):
         pass
 
-
-def save_map_as_image(map_path, output_image_path):
-    chrome_options = Options()
-    chrome_options.add_argument("--headless")
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-
-    # Налаштуйте шлях до вашого драйвера Chrome
-    driver = webdriver.Chrome(options=chrome_options)
-
-    driver.get('file://' + map_path)
-
-    time.sleep(2)  # Зачекайте, поки сторінка завантажиться
-
-    screenshot = driver.get_screenshot_as_png()
-
-    image = Image.open(io.BytesIO(screenshot))
-    image.save(output_image_path)
-
-    driver.quit()
-
 class MapRouteDisplay(RouteDisplay):
     def __init__(self, width, height):
         self.width = width
@@ -56,6 +35,7 @@ class MapRouteDisplay(RouteDisplay):
         # Збереження карти як HTML
         self.map.save("map.html")
 
+
     def get_map_image(self):
         # Ініціалізація Selenium для відображення карти
         options = webdriver.ChromeOptions()
@@ -67,7 +47,6 @@ class MapRouteDisplay(RouteDisplay):
         driver.get("file://" + sys.path[0] + "/map.html")
         driver.save_screenshot("map_screenshot.png")
         driver.quit()
-
 
 class ListRouteDisplay(RouteDisplay):
     def __init__(self, screen, font, color):
@@ -86,8 +65,13 @@ class ListRouteDisplay(RouteDisplay):
         self.screen.blit(track_button_surface, track_button_rect.topleft)
         route['track_button'] = track_button_rect
 
-        self.start_y += 50
+        # Створення кнопки "Видалити"
+        delete_button_surface = self.font.render("Видалити", True, (255, 0, 0))
+        delete_button_rect = delete_button_surface.get_rect(topleft=(750, self.start_y))
+        self.screen.blit(delete_button_surface, delete_button_rect.topleft)
+        route['delete_button'] = delete_button_rect
 
+        self.start_y += 50
 
 class TransportApp:
     def __init__(self):
@@ -125,7 +109,7 @@ class TransportApp:
         self.text_color = (255, 255, 255)
         self.button_font = pygame.font.SysFont(None, 30)
         self.small_font = pygame.font.SysFont("Arial", 18)
-        self.text = "Відстеження руху громадського транспорту"
+        self.text = "Відомості про маршрути громадського транспорту"
         self.text_surface = self.font.render(self.text, True, self.text_color)
         self.text_rect = self.text_surface.get_rect(center=(self.width // 2, self.height - 50))
 
@@ -202,7 +186,7 @@ class TransportApp:
             if event.type == pygame.QUIT:
                 self.running = False
 
-            if event.type == pygame.KEYDOWN:
+            elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
                     self.trolleybus_dx = -self.trolleybus_speed
                 elif event.key == pygame.K_RIGHT:
@@ -211,6 +195,12 @@ class TransportApp:
                     self.trolleybus_dy = -self.trolleybus_speed
                 elif event.key == pygame.K_DOWN:
                     self.trolleybus_dy = self.trolleybus_speed
+                elif event.key == pygame.K_RETURN:
+                    self.search_routes()
+                elif event.key == pygame.K_BACKSPACE:
+                    self.search_text = self.search_text[:-1]
+                else:
+                    self.search_text += event.unicode
 
             elif event.type == pygame.KEYUP:
                 if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
@@ -218,19 +208,19 @@ class TransportApp:
                 if event.key in (pygame.K_UP, pygame.K_DOWN):
                     self.trolleybus_dy = 0
 
-            if event.type == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
                 # Перевірка на натискання кнопок
                 if self.exit_button_rect.collidepoint(event.pos):
                     pygame.quit()
                     sys.exit()
 
-                if self.next_page_button_rect.collidepoint(event.pos):
+                elif self.next_page_button_rect.collidepoint(event.pos):
                     self.show_main_screen = not self.show_main_screen
                     self.show_stops = False  # Повернення до основного екрана
 
-                if not self.show_main_screen and not self.show_stops:
+                # Перевірка на натискання на вкладки
+                elif not self.show_main_screen and not self.show_stops:
                     x, y = event.pos
-                    # Перевірка натискання на вкладки
                     if 20 <= x <= 120 and 70 <= y <= 100:
                         self.current_tab = "ТРАМВАЇ"
                     elif 140 <= x <= 260 and 70 <= y <= 100:
@@ -238,97 +228,19 @@ class TransportApp:
                     elif 280 <= x <= 400 and 70 <= y <= 100:
                         self.current_tab = "АВТОБУСИ"
                     else:
-                        # Перевірка вибору маршруту або кнопки "Відстежити"
-                        for i, route in enumerate(self.routes[self.current_tab]):
-                            if 20 <= x <= 780 and 120 + i * 50 <= y <= 170 + i * 50:
-                                self.selected_route = route
-                                self.show_stops = True
-
-                            # Перевірка наявності 'track_button' і обробка кліку
+                        # Перевірка вибору маршруту або кнопки "Відстежити" та "Видалити"
+                        for route in self.routes[self.current_tab]:
                             if 'track_button' in route and route['track_button'].collidepoint(event.pos):
                                 self.show_map_screen = True
-                                self.current_tab = "КАРТА"  # Додаємо зміну вкладки на "Карта"
-                                self.open_map(self.selected_route['number'], self.selected_route['stops'])
+                                self.current_tab = "КАРТА"
+                                self.open_map(route['number'], route['stops'])
+                                break
+                            elif 'delete_button' in route and route['delete_button'].collidepoint(event.pos):
+                                self.delete_route(route)
+                                break
 
-            if event.type == pygame.KEYDOWN:
-                # Обробка пошуку
-                if event.key == pygame.K_RETURN:
-                    # Виконати пошук
-                    self.search_routes()
-                elif event.key == pygame.K_BACKSPACE:
-                    self.search_text = self.search_text[:-1]
-                else:
-                    self.search_text += event.unicode
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_LEFT:
-                    self.trolleybus_dx = -self.trolleybus_speed
-                elif event.key == pygame.K_RIGHT:
-                    self.trolleybus_dx = self.trolleybus_speed
-                elif event.key == pygame.K_UP:
-                    self.trolleybus_dy = -self.trolleybus_speed
-                elif event.key == pygame.K_DOWN:
-                    self.trolleybus_dy = self.trolleybus_speed
-
-            elif event.type == pygame.KEYUP:
-                if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                    self.trolleybus_dx = 0
-                if event.key in (pygame.K_UP, pygame.K_DOWN):
-                    self.trolleybus_dy = 0
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if self.exit_button_rect.collidepoint(event.pos):
-                    pygame.quit()
-                    sys.exit()
-
-                if self.next_page_button_rect.collidepoint(event.pos):
-                    self.show_main_screen = not self.show_main_screen
-                    self.show_stops = False  # Повернення до основного екрана
-
-                if not self.show_main_screen and not self.show_stops:
-                    x, y = event.pos
-                    # Перевірка натискання на вкладки
-                    if 20 <= x <= 120 and 70 <= y <= 100:
-                        self.current_tab = "ТРАМВАЇ"
-                    elif 140 <= x <= 260 and 70 <= y <= 100:
-                        self.current_tab = "ТРОЛЕЙБУСИ"
-                    elif 280 <= x <= 400 and 70 <= y <= 100:
-                        self.current_tab = "АВТОБУСИ"
-                    else:
-                        # Перевірка вибору маршруту або кнопки "Відстежити"
-                        for i, route in enumerate(self.routes[self.current_tab]):
-                            if 20 <= x <= 780 and 120 + i * 50 <= y <= 170 + i * 50:
-                                self.selected_route = route
-                                self.show_stops = True
-
-                            # Перевірка наявності 'track_button' і обробка кліку
-                            if 'track_button' in route and route['track_button'].collidepoint(event.pos):
-                                self.show_map_screen = True
-                                self.current_tab = "КАРТА"  # Додаємо зміну вкладки на "Карта"
-                                self.open_map(self.selected_route['number'], self.selected_route['stops'])
-
-            if event.type == pygame.KEYDOWN:
-                # Обробка пошуку
-                if event.key == pygame.K_RETURN:
-                    # Виконати пошук
-                    self.search_routes()
-                elif event.key == pygame.K_BACKSPACE:
-                    self.search_text = self.search_text[:-1]
-                else:
-                    self.search_text += event.unicode
-
-
-    def search_routes(self):
-        # Реалізація пошуку маршрутів
-        pass
+    def delete_route(self, route):
+        self.routes[self.current_tab].remove(route)
 
     def open_map(self, route_number, stops):
         url = "https://www.google.com/maps"
@@ -377,9 +289,15 @@ class TransportApp:
 
                     # Створення кнопки "Відстежити"
                     track_button_surface = self.small_font.render("Відстежити", True, self.BLUE)
-                    track_button_rect = track_button_surface.get_rect(topleft=(650, start_y))
+                    track_button_rect = track_button_surface.get_rect(topleft=(600, start_y))
                     self.screen.blit(track_button_surface, track_button_rect.topleft)
                     route['track_button'] = track_button_rect
+
+                    # Кнопка "Видалити"
+                    delete_button_surface = self.small_font.render("Видалити", True, (255, 0, 0))
+                    delete_button_rect = delete_button_surface.get_rect(topleft=(700, start_y))
+                    self.screen.blit(delete_button_surface, delete_button_rect.topleft)
+                    route['delete_button'] = delete_button_rect
 
                     start_y += 50
 
